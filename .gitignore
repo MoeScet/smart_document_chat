@@ -1,0 +1,38 @@
+# ChromaDB persistent storage directory
+# This contains the vector database and embeddings
+# Excluded because it can be large and is regenerated from PDFs
+chroma_db/
+
+# Documents folder - contains PDF files for indexing
+# Excluded because PDFs can be large and may contain sensitive information
+# The folder structure is kept, but PDF contents are ignored
+documents/*.pdf
+documents/*.PDF
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# IDE settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+*.tmp
+
+# Claude logs
+.claude/*
