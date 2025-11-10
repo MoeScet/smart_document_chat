@@ -4,13 +4,14 @@ A document chat API using RAG (Retrieval Augmented Generation) to query PDF docu
 
 ## Features
 
+- **Web chat interface** accessible from any browser on your network
 - RESTful API for document chat functionality
 - Semantic search over indexed documents
-- Chat interface via `/chat` endpoint
 - Source citations with each response
 - Document management (upload, delete, list)
 - Runs locally using Ollama
 - Auto-generated API documentation at `/docs`
+- Network-accessible from multiple devices
 
 ## Tech Stack
 
@@ -74,10 +75,32 @@ Or using uvicorn directly:
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-API endpoints:
-- `http://localhost:8000`
-- `http://localhost:8000/docs` (interactive documentation)
-- `http://localhost:8000/redoc` (alternative documentation)
+Access points:
+- `http://localhost:8000` - API information and status
+- `http://localhost:8000/chat` - Chat interface (web UI)
+- `http://localhost:8000/docs` - Interactive API documentation
+- `http://localhost:8000/redoc` - Alternative API documentation
+
+### 4. Access from Other Devices (Optional)
+
+To access the chat interface from other computers on the same network:
+
+1. **Find your server's IP address:**
+   ```bash
+   ipconfig
+   ```
+   Look for IPv4 Address (e.g., `192.168.1.100`)
+
+2. **Configure Windows Firewall:**
+   ```bash
+   # Run as Administrator
+   netsh advfirewall firewall add rule name="Smart Doc Chat" dir=in action=allow protocol=TCP localport=8000
+   ```
+
+3. **Access from other devices:**
+   - Open browser on another PC/tablet/phone on the same network
+   - Navigate to: `http://YOUR_SERVER_IP:8000/chat`
+   - Example: `http://192.168.1.100:8000/chat`
 
 ## Usage
 
@@ -99,7 +122,23 @@ For batch document indexing:
    python main.py
    ```
 
-### Method 2: API Upload
+### Method 2: Web Interface
+
+For interactive chat via browser:
+
+1. Start API server:
+   ```bash
+   python main.py
+   ```
+
+2. Open browser and navigate to:
+   ```
+   http://localhost:8000/chat
+   ```
+
+3. Start chatting with your documents through the web interface
+
+### Method 3: API Upload
 
 For programmatic document management:
 
@@ -115,7 +154,7 @@ For programmatic document management:
      -F "file=@/path/to/document.pdf"
    ```
 
-3. Query documents:
+3. Query documents via API:
    ```bash
    curl -X POST "http://localhost:8000/chat" \
      -H "Content-Type: application/json" \
@@ -126,19 +165,31 @@ For programmatic document management:
      }'
    ```
 
+   Note: POST `/chat` is the API endpoint, while GET `/chat` serves the web interface
+
 ## API Endpoints
+
+### Frontend
+
+**GET /chat** - Serve the chat interface
+```
+http://localhost:8000/chat
+```
+Opens the web-based chat interface in your browser
 
 ### Health & Status
 
-**GET /** - API health check
+**GET /** - API information and status
 ```bash
 curl http://localhost:8000/
 ```
+Returns API version, status, and available endpoints
 
 **GET /health** - Detailed health status
 ```bash
 curl http://localhost:8000/health
 ```
+Returns vector store status, chunk count, and Ollama connection status
 
 ### Chat
 
@@ -216,9 +267,9 @@ curl -X DELETE "http://localhost:8000/documents/example.pdf"
 
 ```
 smart_doc_chat/
-├── main.py                    # FastAPI application
+├── main.py                    # FastAPI application and web server
 ├── schemas.py                 # Pydantic models for request/response
-├── index.html                 # React frontend
+├── index.html                 # Web chat interface (served at /chat)
 ├── preprocess_documents.py    # CLI script to index PDFs
 ├── document_processor.py      # PDF parsing and chunking
 ├── vector_store.py            # ChromaDB wrapper

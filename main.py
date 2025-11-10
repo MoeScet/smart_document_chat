@@ -7,6 +7,7 @@ import shutil
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 
 from vector_store import VectorStore
@@ -78,12 +79,23 @@ app.add_middleware(
 
 @app.get("/", tags=["Health"])
 async def root():
-    """Root endpoint - API health check"""
+    """Root endpoint - API information"""
     return {
         "status": "online",
         "message": "Smart Document Chat API is running",
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "endpoints": {
+            "chat_interface": "/chat",
+            "api_docs": "/docs",
+            "health_check": "/health"
+        }
     }
+
+
+@app.get("/chat", tags=["Frontend"])
+async def chat_interface():
+    """Serve the chat interface"""
+    return FileResponse("index.html")
 
 
 @app.get("/health", tags=["Health"])
