@@ -146,7 +146,7 @@ async def chat(request: ChatRequest):
         ]
 
         # Get response from chat engine
-        response_text, sources_list = chat_engine.get_response(
+        response_text, sources_list = await chat_engine.get_response(
             query=request.message,
             chat_history=chat_history,
             n_results=request.n_results
@@ -201,8 +201,8 @@ async def chat_stream(request: ChatRequest):
         for msg in request.chat_history
     ]
 
-    def event_generator():
-        for chunk in chat_engine.get_response_stream(
+    async def event_generator():
+        async for chunk in chat_engine.get_response_stream(
             query=request.message,
             chat_history=chat_history,
             n_results=request.n_results

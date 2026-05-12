@@ -4,7 +4,7 @@ Integrates Ollama LLM with RAG for document-based question answering
 """
 
 from typing import List, Dict, Tuple
-import requests
+import httpx
 import json
 from config import OLLAMA_MODEL, OLLAMA_URL, TEMPERATURE, TOP_P, N_RESULTS_DEFAULT
 
@@ -31,12 +31,13 @@ class ChatEngine:
     def _test_connection(self):
         """Test if Ollama is running and accessible"""
         try:
-            response = requests.get(f"{OLLAMA_URL}/api/tags")
+            with httpx.Client(timeout=5) as client:
+                response = client.get(f"{OLLAMA_URL}/api/tags")
             if response.status_code == 200:
-                print(f"Connected to Ollama")
+                print("Connected to Ollama")
             else:
                 print("Warning: Ollama might not be running properly")
-        except requests.exceptions.ConnectionError:
+        except httpx.ConnectError:
             print("Error: Cannot connect to Ollama. Make sure Ollama is running!")
             print("   Run: ollama serve")
 
@@ -48,12 +49,13 @@ class ChatEngine:
             True if Ollama is accessible, False otherwise
         """
         try:
-            response = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5)
+            with httpx.Client(timeout=5) as client:
+                response = client.get(f"{OLLAMA_URL}/api/tags")
             return response.status_code == 200
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+        except (httpx.ConnectError, httpx.TimeoutException):
             return False
     
-    def get_response(
+    async def get_response(
         self,
         query: str,
         chat_history: List[Dict] = None,
@@ -92,7 +94,7 @@ class ChatEngine:
 
         # Step 4: Get response from Ollama
         try:
-            response_text = self._call_ollama(prompt)
+            response_text = await self._call_ollama(prompt)
         except Exception as e:
             return f"Error getting response from Ollama: {str(e)}", []
 
@@ -158,7 +160,7 @@ ANSWER:"""
         
         return prompt
     
-    def get_response_stream(
+    async def get_response_stream(
         self,
         query: str,
         chat_history: List[Dict] = None,
@@ -195,7 +197,7 @@ ANSWER:"""
 
         # Step 4: Stream from Ollama
         try:
-            for token in self._call_ollama_stream(prompt):
+            async for token in self._call_ollama_stream(prompt):
                 yield json.dumps({"type": "token", "content": token})
         except Exception as e:
             yield json.dumps({"type": "token", "content": f"Error: {str(e)}"})
@@ -228,9 +230,9 @@ ANSWER:"""
         })
         yield json.dumps({"type": "done"})
 
-    def _call_ollama(self, prompt: str) -> str:
+    async def _call_ollama(self, prompt: str) -> str:
         """
-        Call Ollama API to generate a complete response
+        Call Ollama API to generate a complete response (non-blocking).
 
         Args:
             prompt: The complete prompt to send
@@ -249,26 +251,23 @@ ANSWER:"""
         }
 
         try:
-            response = requests.post(
-                self.ollama_url,
-                json=payload,
-                timeout=120
-            )
+            async with httpx.AsyncClient(timeout=120) as client:
+                response = await client.post(self.ollama_url, json=payload)
             response.raise_for_status()
 
             result = response.json()
             return result.get("response", "No response generated")
 
-        except requests.exceptions.ConnectionError:
+        except httpx.ConnectError:
             raise Exception("Cannot connect to Ollama. Make sure it's running with: ollama serve")
-        except requests.exceptions.Timeout:
+        except httpx.ReadTimeout:
             raise Exception("Ollama request timed out. Try a smaller model or simpler question.")
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             raise Exception(f"Error calling Ollama: {str(e)}")
 
-    def _call_ollama_stream(self, prompt: str):
+    async def _call_ollama_stream(self, prompt: str):
         """
-        Call Ollama API with streaming enabled. Yields tokens as they arrive.
+        Call Ollama API with streaming enabled (non-blocking). Yields tokens as they arrive.
 
         Args:
             prompt: The complete prompt to send
@@ -287,28 +286,23 @@ ANSWER:"""
         }
 
         try:
-            response = requests.post(
-                self.ollama_url,
-                json=payload,
-                stream=True,
-                timeout=120
-            )
-            response.raise_for_status()
+            async with httpx.AsyncClient(timeout=120) as client:
+                async with client.stream("POST", self.ollama_url, json=payload) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if line:
+                            chunk = json.loads(line)
+                            token = chunk.get("response", "")
+                            if token:
+                                yield token
+                            if chunk.get("done", False):
+                                break
 
-            for line in response.iter_lines():
-                if line:
-                    chunk = json.loads(line)
-                    token = chunk.get("response", "")
-                    if token:
-                        yield token
-                    if chunk.get("done", False):
-                        break
-
-        except requests.exceptions.ConnectionError:
+        except httpx.ConnectError:
             raise Exception("Cannot connect to Ollama. Make sure it's running with: ollama serve")
-        except requests.exceptions.Timeout:
+        except httpx.ReadTimeout:
             raise Exception("Ollama request timed out. Try a smaller model or simpler question.")
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             raise Exception(f"Error calling Ollama: {str(e)}")
     
     def change_model(self, model_name: str):
