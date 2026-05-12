@@ -6,23 +6,24 @@ Integrates Ollama LLM with RAG for document-based question answering
 from typing import List, Dict, Tuple
 import requests
 import json
+from config import OLLAMA_MODEL, OLLAMA_URL, TEMPERATURE, TOP_P, N_RESULTS_DEFAULT
 
 class ChatEngine:
     """
     Handles chat interactions using Ollama and RAG
     """
-    
-    def __init__(self, vector_store, model_name: str = "llama3.1:8b"):
+
+    def __init__(self, vector_store, model_name: str = None):
         """
         Initialize the chat engine
-        
+
         Args:
             vector_store: VectorStore instance for document retrieval
             model_name: Name of the Ollama model to use
         """
         self.vector_store = vector_store
-        self.model_name = model_name
-        self.ollama_url = "http://localhost:11434/api/generate"
+        self.model_name = model_name or OLLAMA_MODEL
+        self.ollama_url = f"{OLLAMA_URL}/api/generate"
         
         # Test Ollama connection
         self._test_connection()
@@ -30,13 +31,13 @@ class ChatEngine:
     def _test_connection(self):
         """Test if Ollama is running and accessible"""
         try:
-            response = requests.get("http://localhost:11434/api/tags")
+            response = requests.get(f"{OLLAMA_URL}/api/tags")
             if response.status_code == 200:
-                print(f"✅ Connected to Ollama")
+                print(f"Connected to Ollama")
             else:
-                print("⚠️ Warning: Ollama might not be running properly")
+                print("Warning: Ollama might not be running properly")
         except requests.exceptions.ConnectionError:
-            print("❌ Error: Cannot connect to Ollama. Make sure Ollama is running!")
+            print("Error: Cannot connect to Ollama. Make sure Ollama is running!")
             print("   Run: ollama serve")
 
     def check_ollama(self) -> bool:
@@ -47,7 +48,7 @@ class ChatEngine:
             True if Ollama is accessible, False otherwise
         """
         try:
-            response = requests.get("http://localhost:11434/api/tags", timeout=5)
+            response = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5)
             return response.status_code == 200
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
             return False
@@ -56,7 +57,7 @@ class ChatEngine:
         self,
         query: str,
         chat_history: List[Dict] = None,
-        n_results: int = 5
+        n_results: int = None
     ) -> Tuple[str, List[Dict]]:
         """
         Get a response to a user query using RAG
@@ -70,15 +71,21 @@ class ChatEngine:
             Tuple of (response_text, metadata_list)
             metadata_list contains dicts with 'source', 'page', 'chunk_index' keys
         """
+        n_results = n_results or N_RESULTS_DEFAULT
+
         # Step 1: Retrieve relevant documents
-        relevant_docs, metadatas = self.vector_store.search(query, n_results=n_results)
+        relevant_docs, metadatas, distances = self.vector_store.search(query, n_results=n_results)
 
         if not relevant_docs:
             return "I don't have any documents to reference. Please upload some documents first.", []
 
-        # Step 2: Build the context from retrieved documents
-        # Join documents with clear separation but no numbering
-        context = "\n\n---\n\n".join(relevant_docs)
+        # Step 2: Build context with page labels
+        context_parts = []
+        for doc, meta in zip(relevant_docs, metadatas):
+            page = meta.get("page", "?")
+            source = meta.get("source", "Unknown")
+            context_parts.append(f"[{source} - Page {page}]:\n{doc}")
+        context = "\n\n---\n\n".join(context_parts)
 
         # Step 3: Build the prompt
         prompt = self._build_prompt(query, context, chat_history)
@@ -89,9 +96,17 @@ class ChatEngine:
         except Exception as e:
             return f"Error getting response from Ollama: {str(e)}", []
 
-        # Step 5: Return response with raw metadata
-        # The metadata list contains dicts that can be used by different interfaces
-        return response_text, metadatas
+        # Step 5: Build source list with chunk text included
+        sources = []
+        for doc, meta in zip(relevant_docs, metadatas):
+            sources.append({
+                "source": meta.get("source", "Unknown"),
+                "page": meta.get("page", 0),
+                "chunk": meta.get("chunk", 0),
+                "text": doc
+            })
+
+        return response_text, sources
     
     def _build_prompt(
         self, 
@@ -111,17 +126,15 @@ class ChatEngine:
             Formatted prompt string
         """
         # System message
-        system_msg = """You are a helpful AI assistant that answers questions based on provided documents.
+        system_msg = """You are a helpful assistant. Answer the user's question using ONLY the provided documents below. Read ALL the documents carefully before answering.
 
-IMPORTANT RULES:
-- Answer questions using ONLY the information from the provided documents
-- Do NOT mention document numbers (like "Document 1", "Document 2", etc.) in your response
-- Answer naturally as if the information is from a single coherent source
-- For summarization questions ("what is this about?", "summarize"), provide a comprehensive overview of the content
-- If the answer is not in the documents, say "I cannot find that information in the uploaded documents"
-- Be concise but thorough
-- If asked about something not in the documents, politely decline and explain what information IS available"""
-        
+Rules:
+- Use ONLY information found in the documents. Do not add outside knowledge.
+- If the documents contain the answer, provide it. Read every section thoroughly.
+- If the answer is not in the documents, say so.
+- Do NOT reference page numbers, document labels, or section headers in your answer.
+- Be concise but thorough. Answer every part of the question."""
+
         # Build chat history context
         history_text = ""
         if chat_history:
@@ -129,29 +142,99 @@ IMPORTANT RULES:
                 role = msg.get("role", "user")
                 content = msg.get("content", "")
                 history_text += f"\n{role.upper()}: {content}"
-        
+
         # Complete prompt
         prompt = f"""{system_msg}
 
 PREVIOUS CONVERSATION:
 {history_text if history_text else "(No previous conversation)"}
 
-RELEVANT DOCUMENTS:
+DOCUMENTS:
 {context}
 
-USER QUESTION: {query}
+QUESTION: {query}
 
-ASSISTANT ANSWER:"""
+ANSWER:"""
         
         return prompt
     
+    def get_response_stream(
+        self,
+        query: str,
+        chat_history: List[Dict] = None,
+        n_results: int = None
+    ):
+        """
+        Stream a response token by token, then yield sources at the end.
+
+        Yields JSON strings:
+            {"type": "token", "content": "word"}
+            {"type": "sources", "sources": [...], "sources_text": "..."}
+            {"type": "done"}
+        """
+        n_results = n_results or N_RESULTS_DEFAULT
+
+        # Step 1: Retrieve relevant documents
+        relevant_docs, metadatas, distances = self.vector_store.search(query, n_results=n_results)
+
+        if not relevant_docs:
+            yield json.dumps({"type": "token", "content": "I don't have any documents to reference. Please upload some documents first."})
+            yield json.dumps({"type": "done"})
+            return
+
+        # Step 2: Build context with page labels
+        context_parts = []
+        for doc, meta in zip(relevant_docs, metadatas):
+            page = meta.get("page", "?")
+            source = meta.get("source", "Unknown")
+            context_parts.append(f"[{source} - Page {page}]:\n{doc}")
+        context = "\n\n---\n\n".join(context_parts)
+
+        # Step 3: Build the prompt
+        prompt = self._build_prompt(query, context, chat_history)
+
+        # Step 4: Stream from Ollama
+        try:
+            for token in self._call_ollama_stream(prompt):
+                yield json.dumps({"type": "token", "content": token})
+        except Exception as e:
+            yield json.dumps({"type": "token", "content": f"Error: {str(e)}"})
+            yield json.dumps({"type": "done"})
+            return
+
+        # Step 5: Build and yield sources
+        sources = []
+        for doc, meta in zip(relevant_docs, metadatas):
+            sources.append({
+                "source": meta.get("source", "Unknown"),
+                "page": meta.get("page", 0),
+                "text": doc
+            })
+
+        # Build sources_text
+        parts = []
+        for src in sources:
+            snippet = src["text"][:200] + "..." if len(src["text"]) > 200 else src["text"]
+            parts.append(f"[{src['source']} - Page {src['page']}]\n\"{snippet}\"")
+        sources_text = "Sources:\n" + "\n\n".join(parts)
+
+        yield json.dumps({
+            "type": "sources",
+            "sources": [
+                {"filename": s["source"], "page": s["page"], "text": s["text"]}
+                for s in sources
+            ],
+            "sources_text": sources_text
+        })
+        yield json.dumps({"type": "done"})
+
     def _call_ollama(self, prompt: str) -> str:
         """
-        Call Ollama API to generate a response
-        
+        Call Ollama API to generate a complete response
+
         Args:
             prompt: The complete prompt to send
-        
+
         Returns:
             Generated response text
         """
@@ -160,22 +243,67 @@ ASSISTANT ANSWER:"""
             "prompt": prompt,
             "stream": False,
             "options": {
-                "temperature": 0.7,
-                "top_p": 0.9,
+                "temperature": TEMPERATURE,
+                "top_p": TOP_P,
             }
         }
-        
+
         try:
             response = requests.post(
                 self.ollama_url,
                 json=payload,
-                timeout=120  # 2 minute timeout
+                timeout=120
             )
             response.raise_for_status()
-            
+
             result = response.json()
             return result.get("response", "No response generated")
-            
+
+        except requests.exceptions.ConnectionError:
+            raise Exception("Cannot connect to Ollama. Make sure it's running with: ollama serve")
+        except requests.exceptions.Timeout:
+            raise Exception("Ollama request timed out. Try a smaller model or simpler question.")
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"Error calling Ollama: {str(e)}")
+
+    def _call_ollama_stream(self, prompt: str):
+        """
+        Call Ollama API with streaming enabled. Yields tokens as they arrive.
+
+        Args:
+            prompt: The complete prompt to send
+
+        Yields:
+            Individual token strings
+        """
+        payload = {
+            "model": self.model_name,
+            "prompt": prompt,
+            "stream": True,
+            "options": {
+                "temperature": TEMPERATURE,
+                "top_p": TOP_P,
+            }
+        }
+
+        try:
+            response = requests.post(
+                self.ollama_url,
+                json=payload,
+                stream=True,
+                timeout=120
+            )
+            response.raise_for_status()
+
+            for line in response.iter_lines():
+                if line:
+                    chunk = json.loads(line)
+                    token = chunk.get("response", "")
+                    if token:
+                        yield token
+                    if chunk.get("done", False):
+                        break
+
         except requests.exceptions.ConnectionError:
             raise Exception("Cannot connect to Ollama. Make sure it's running with: ollama serve")
         except requests.exceptions.Timeout:
@@ -191,4 +319,4 @@ ASSISTANT ANSWER:"""
             model_name: Name of the new model
         """
         self.model_name = model_name
-        print(f"✅ Switched to model: {model_name}")
+        print(f"Switched to model: {model_name}")

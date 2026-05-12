@@ -1,25 +1,26 @@
 # Smart Document Chat API
 
-A document chat API using RAG (Retrieval Augmented Generation) to query PDF documents. Built with FastAPI.
+A document chat API using RAG (Retrieval Augmented Generation) to query PDF documents. Built with FastAPI with streaming responses.
 
 ## Features
 
+- **Streaming chat** - responses appear word by word via Server-Sent Events
+- **Source evidence** - each response includes the actual text chunks used as evidence
 - **Web chat interface** accessible from any browser on your network
 - RESTful API for document chat functionality
-- Semantic search over indexed documents
-- Source citations with each response
+- Semantic search over indexed documents using BGE embeddings
 - Document management (upload, delete, list)
+- Centralized configuration (`config.py`)
 - Runs locally using Ollama
 - Auto-generated API documentation at `/docs`
-- Network-accessible from multiple devices
 
 ## Tech Stack
 
-- **FastAPI**: Web framework for building APIs
+- **FastAPI**: Web framework with streaming support
 - **Uvicorn**: ASGI server
-- **Ollama**: Local LLM
+- **Ollama**: Local LLM (configurable model)
 - **ChromaDB**: Vector database for document embeddings
-- **Sentence Transformers**: Embedding generation
+- **Sentence Transformers**: Embedding generation (`BAAI/bge-large-en-v1.5`)
 - **Pydantic**: Data validation
 
 ## Prerequisites
@@ -37,7 +38,7 @@ A document chat API using RAG (Retrieval Augmented Generation) to query PDF docu
    ```
    - Download a model:
    ```bash
-   ollama pull llama3.1:8b
+   ollama pull mistral:7b
    ```
 
 ## Installation
@@ -48,22 +49,25 @@ A document chat API using RAG (Retrieval Augmented Generation) to query PDF docu
 pip install -r requirements.txt
 ```
 
-Dependencies:
-- `fastapi` - Web framework
-- `uvicorn` - ASGI server
-- `python-multipart` - File upload support
-- `pypdf` - PDF parsing
-- `chromadb` - Vector database
-- `sentence-transformers` - Embedding generation
-- `requests` - HTTP client for Ollama
+### 2. Configure Settings
 
-### 2. Start Ollama
+Edit `config.py` to match your setup:
+
+```python
+OLLAMA_MODEL = "mistral:7b"       # Your Ollama model
+TEMPERATURE = 0.3                  # Lower = more factual, higher = more creative
+N_RESULTS_DEFAULT = 3              # Number of chunks to retrieve per query
+CHUNK_SIZE = 800                   # Characters per chunk
+CHUNK_OVERLAP = 200                # Overlap between chunks
+```
+
+### 3. Start Ollama
 
 ```bash
 ollama serve
 ```
 
-### 3. Run the API Server
+### 4. Run the API Server
 
 ```bash
 python main.py
@@ -76,31 +80,8 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 Access points:
-- `http://localhost:8000` - API information and status
 - `http://localhost:8000/chat` - Chat interface (web UI)
 - `http://localhost:8000/docs` - Interactive API documentation
-- `http://localhost:8000/redoc` - Alternative API documentation
-
-### 4. Access from Other Devices (Optional)
-
-To access the chat interface from other computers on the same network:
-
-1. **Find your server's IP address:**
-   ```bash
-   ipconfig
-   ```
-   Look for IPv4 Address (e.g., `192.168.1.100`)
-
-2. **Configure Windows Firewall:**
-   ```bash
-   # Run as Administrator
-   netsh advfirewall firewall add rule name="Smart Doc Chat" dir=in action=allow protocol=TCP localport=8000
-   ```
-
-3. **Access from other devices:**
-   - Open browser on another PC/tablet/phone on the same network
-   - Navigate to: `http://YOUR_SERVER_IP:8000/chat`
-   - Example: `http://192.168.1.100:8000/chat`
 
 ## Usage
 
@@ -115,16 +96,12 @@ For batch document indexing:
    python preprocess_documents.py
    ```
 
-   This extracts text, creates chunks, and stores embeddings in ChromaDB. Already indexed documents are skipped. First run downloads the embedding model (~90MB).
-
 3. Start API server:
    ```bash
    python main.py
    ```
 
 ### Method 2: Web Interface
-
-For interactive chat via browser:
 
 1. Start API server:
    ```bash
@@ -136,76 +113,35 @@ For interactive chat via browser:
    http://localhost:8000/chat
    ```
 
-3. Start chatting with your documents through the web interface
+3. Start chatting with your documents. Responses stream in word by word with source evidence displayed below each answer.
 
-### Method 3: API Upload
+### Method 3: API
 
-For programmatic document management:
+Upload a document:
+```bash
+curl -X POST "http://localhost:8000/documents/upload" \
+  -F "file=@document.pdf"
+```
 
-1. Start API server:
-   ```bash
-   python main.py
-   ```
+Query via standard endpoint (full JSON response):
+```bash
+curl -X POST "http://localhost:8000/chat" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "What is the main topic?", "chat_history": []}'
+```
 
-2. Upload document:
-   ```bash
-   curl -X POST "http://localhost:8000/documents/upload" \
-     -H "Content-Type: multipart/form-data" \
-     -F "file=@/path/to/document.pdf"
-   ```
-
-3. Query documents via API:
-   ```bash
-   curl -X POST "http://localhost:8000/chat" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "message": "What is the main topic of this document?",
-       "chat_history": [],
-       "n_results": 5
-     }'
-   ```
-
-   Note: POST `/chat` is the API endpoint, while GET `/chat` serves the web interface
+Query via streaming endpoint (Server-Sent Events):
+```bash
+curl -X POST "http://localhost:8000/chat/stream" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "What is the main topic?", "chat_history": []}'
+```
 
 ## API Endpoints
 
-### Frontend
-
-**GET /chat** - Serve the chat interface
-```
-http://localhost:8000/chat
-```
-Opens the web-based chat interface in your browser
-
-### Health & Status
-
-**GET /** - API information and status
-```bash
-curl http://localhost:8000/
-```
-Returns API version, status, and available endpoints
-
-**GET /health** - Detailed health status
-```bash
-curl http://localhost:8000/health
-```
-Returns vector store status, chunk count, and Ollama connection status
-
 ### Chat
 
-**POST /chat** - Send a message and get AI response
-
-Request body:
-```json
-{
-  "message": "What is this document about?",
-  "chat_history": [
-    {"role": "user", "content": "Previous question"},
-    {"role": "assistant", "content": "Previous answer"}
-  ],
-  "n_results": 5
-}
-```
+**POST /chat** - Send a message, get full JSON response
 
 Response:
 ```json
@@ -213,146 +149,98 @@ Response:
   "response": "This document is about...",
   "sources": [
     {
-      "filename": "example.pdf",
-      "page": 1,
-      "chunk_index": 0
+      "filename": "report.pdf",
+      "page": 3,
+      "text": "The actual chunk text used as evidence..."
     }
   ],
-  "sources_text": "Sources:\n- example.pdf (Page 1)"
+  "sources_text": "Sources:\n[report.pdf - Page 3]\n\"The actual chunk text...\""
 }
 ```
 
-Example:
-```bash
-curl -X POST "http://localhost:8000/chat" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "message": "Summarize the key points",
-    "chat_history": [],
-    "n_results": 5
-  }'
+**POST /chat/stream** - Send a message, get streaming SSE response
+
+Each event is a JSON object:
+```
+data: {"type": "token", "content": "word"}
+data: {"type": "sources", "sources": [...], "sources_text": "..."}
+data: {"type": "done"}
 ```
 
 ### Document Management
 
-**GET /documents/indexed** - List all indexed documents
-```bash
-curl http://localhost:8000/documents/indexed
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/documents/indexed` | List all indexed documents |
+| GET | `/documents/stats` | Get document and chunk counts |
+| POST | `/documents/upload` | Upload and index a PDF |
+| DELETE | `/documents/{filename}` | Remove a document from index |
+
+### Health
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/` | API status |
+| GET | `/health` | Vector store and Ollama status |
+
+## Configuration
+
+All settings are in `config.py`:
+
+```python
+# LLM Settings
+OLLAMA_MODEL = "mistral:7b"       # Model name from `ollama list`
+OLLAMA_URL = "http://localhost:11434"
+TEMPERATURE = 0.3                  # 0.1-0.3 for factual, 0.5-0.7 for conversational
+TOP_P = 0.9
+
+# Retrieval Settings
+N_RESULTS_DEFAULT = 3              # Chunks retrieved per query
+EMBEDDING_MODEL = "BAAI/bge-large-en-v1.5"
+
+# Chunking Settings
+CHUNK_SIZE = 800                   # Max characters per chunk
+CHUNK_OVERLAP = 200                # Overlap between chunks
+
+# Storage Settings
+CHROMA_COLLECTION = "documents"
+CHROMA_PERSIST_DIR = "./chroma_db"
+DOCUMENTS_FOLDER = "./documents"
 ```
 
-**GET /documents/stats** - Get document statistics
-```bash
-curl http://localhost:8000/documents/stats
-```
+### Switching Machines / Models
 
-**POST /documents/upload** - Upload and index a PDF
-```bash
-curl -X POST "http://localhost:8000/documents/upload" \
-  -F "file=@document.pdf"
-```
+When moving to a different machine (e.g., with a larger LLM):
 
-**DELETE /documents/{filename}** - Remove a document
-```bash
-curl -X DELETE "http://localhost:8000/documents/example.pdf"
-```
+1. Edit `config.py`:
+   ```python
+   OLLAMA_MODEL = "llama3.1:40b"   # Your larger model
+   TEMPERATURE = 0.5                # Can raise for larger models
+   N_RESULTS_DEFAULT = 5            # Larger models handle more context
+   ```
 
-### Example Queries
-
-- "What is the main topic of this document?"
-- "Summarize the key points from page 3"
-- "What does the document say about [specific topic]?"
-- "Compare the information in section 2 and section 4"
+2. Re-index documents (only needed if changing `EMBEDDING_MODEL` or `CHUNK_SIZE`):
+   ```bash
+   rm -rf chroma_db
+   python preprocess_documents.py
+   ```
 
 ## Project Structure
 
 ```
-smart_doc_chat/
-├── main.py                    # FastAPI application and web server
+smart_doc_chat_API/
+├── main.py                    # FastAPI application and endpoints
+├── config.py                  # Centralized configuration
 ├── schemas.py                 # Pydantic models for request/response
 ├── index.html                 # Web chat interface (served at /chat)
 ├── preprocess_documents.py    # CLI script to index PDFs
-├── document_processor.py      # PDF parsing and chunking
-├── vector_store.py            # ChromaDB wrapper
-├── chat_engine.py             # RAG integration with Ollama
+├── document_processor.py      # PDF parsing, text cleaning, chunking
+├── vector_store.py            # ChromaDB wrapper for embeddings
+├── chat_engine.py             # RAG integration with Ollama (standard + streaming)
 ├── requirements.txt           # Python dependencies
-├── README.md                  # Documentation
 ├── documents/                 # PDF storage
-└── chroma_db/                 # Vector database storage
+└── chroma_db/                 # Vector database storage (auto-created)
 ```
-
-## Configuration
-
-### Change LLM Model
-
-In `chat_engine.py`, line 15:
-
-```python
-def __init__(self, vector_store, model_name: str = "llama3.1:8b"):
-```
-
-Available models (install with `ollama pull <model>`):
-- `llama3.1:8b` (default)
-- `llama3.2`
-- `llama3.2:1b`
-- `mistral`
-- `phi3`
-
-### Adjust Chunk Size
-
-In `document_processor.py`, line 48:
-
-```python
-page_chunks = split_text(text, chunk_size=1000, overlap=100)
-```
-
-Adjust `chunk_size` (default: 1000) and `overlap` (default: 100) based on document characteristics.
-
-### Change Retrieved Document Count
-
-In `chat_engine.py`, line 46:
-
-```python
-def get_response(
-    self,
-    query: str,
-    chat_history: List[Dict] = None,
-    n_results: int = 5
-)
-```
-
-Adjust `n_results` (default: 5) to change the number of document chunks retrieved per query.
-
-## Troubleshooting
-
-### "Cannot connect to Ollama"
-Start Ollama server:
-```bash
-ollama serve
-```
-
-### "Model not found"
-Download the model:
-```bash
-ollama pull llama3.1:8b
-```
-
-### "No documents indexed"
-Run preprocessing:
-```bash
-python preprocess_documents.py
-```
-
-### PDF preprocessing fails
-Check the following:
-- PDF is not password protected
-- pypdf is installed: `pip install pypdf`
-- PDF is in the `documents/` folder
-
-### Slow responses
-Options to improve performance:
-- Use a smaller model: `llama3.2:1b` or `phi3`
-- Reduce `n_results` in `chat_engine.py` from 5 to 3
-- Use GPU acceleration with Ollama if available
 
 ## How It Works
 
@@ -360,68 +248,58 @@ Options to improve performance:
 
 **Phase 1: Preprocessing**
 
-1. Document Loading
-   - PDFs placed in `documents/` folder
-   - `preprocess_documents.py` scans for new files
-
-2. Text Extraction
-   - `pypdf` extracts text from each page
-   - Text prepared for chunking
-
-3. Chunking
-   - Text split into ~1000 character chunks with 100 character overlap
-   - Each chunk retains metadata (filename, page number)
-
-4. Embedding and Storage
-   - Each chunk converted to vector using `all-MiniLM-L6-v2` model
-   - Vectors stored in ChromaDB
+1. PDFs placed in `documents/` folder
+2. Text extracted page by page using `pypdf`
+3. Extracted text cleaned (whitespace normalization, punctuation fixes)
+4. Text split into ~800 character chunks with 200 character overlap
+5. Each chunk embedded using `BAAI/bge-large-en-v1.5` (1024-dim vectors)
+6. Vectors stored in ChromaDB with metadata (filename, page number)
 
 **Phase 2: Querying**
 
-5. Question Processing
-   - User sends POST request to `/chat` endpoint
-   - Question converted to vector using same embedding model
+1. User sends question via web UI or API
+2. Question embedded using same model
+3. ChromaDB finds most similar chunks via cosine similarity
+4. Retrieved chunks labeled with page info and sent to LLM as context
+5. LLM generates answer based on context only
+6. Response streamed token by token with source evidence
 
-6. Semantic Search
-   - ChromaDB finds 5 most similar document chunks
-   - Uses cosine similarity for matching
+## Troubleshooting
 
-7. Response Generation
-   - Retrieved chunks, question, and chat history sent to Ollama
-   - LLM generates answer based on context
-   - Source citations extracted from chunk metadata
+### "Cannot connect to Ollama"
+```bash
+ollama serve
+```
 
-### RAG vs Fine-tuning
+### "Model not found"
+```bash
+ollama pull mistral:7b
+```
 
-- No training required
-- Immediate integration of new documents
-- Verifiable source citations
-- Lower resource requirements
-- Simple knowledge updates
+### "No documents indexed"
+```bash
+python preprocess_documents.py
+```
+
+### Slow responses
+- Use a smaller model (e.g., `phi4-mini`)
+- Reduce `N_RESULTS_DEFAULT` in `config.py`
+- Use GPU acceleration with Ollama if available
+
+### Changing embedding model
+If you change `EMBEDDING_MODEL` in config, you must re-index:
+```bash
+rm -rf chroma_db
+python preprocess_documents.py
+```
 
 ## References
 
 - FastAPI: https://fastapi.tiangolo.com
-- Pydantic: https://docs.pydantic.dev
 - Ollama: https://ollama.com/library
 - ChromaDB: https://docs.trychroma.com
+- BGE Embeddings: https://huggingface.co/BAAI/bge-large-en-v1.5
 - RAG: https://www.ibm.com/think/topics/retrieval-augmented-generation
-
-## Extensions
-
-Potential enhancements:
-
-1. Add support for additional file types (.txt, .docx, .csv, .md)
-2. Implement multiple collections for document organization
-3. Export conversation history (JSON/PDF)
-4. Add authentication (JWT/OAuth)
-5. Implement rate limiting
-6. Add conversation persistence (database storage)
-7. Scheduled document re-indexing
-8. Streaming responses (SSE)
-9. Response caching (Redis)
-10. OCR for image-based PDFs
-11. Web search integration
 
 ## License
 

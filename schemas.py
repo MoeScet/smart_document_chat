@@ -3,6 +3,7 @@ Pydantic models for API request/response validation
 """
 from typing import List, Optional
 from pydantic import BaseModel, Field
+from config import N_RESULTS_DEFAULT
 
 
 class Message(BaseModel):
@@ -19,18 +20,18 @@ class ChatRequest(BaseModel):
         description="Previous conversation history"
     )
     n_results: int = Field(
-        default=5,
-        description="Number of relevant documents to retrieve",
+        default=N_RESULTS_DEFAULT,
+        description="Number of relevant document chunks to retrieve",
         ge=1,
         le=20
     )
 
 
 class Source(BaseModel):
-    """Document source information"""
+    """Document source information with supporting text"""
     filename: str
     page: int
-    chunk_index: int
+    text: str = Field(..., description="The source text chunk used as evidence")
 
 
 class ChatResponse(BaseModel):

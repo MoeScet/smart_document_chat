@@ -5,6 +5,8 @@ Handles PDF parsing and text chunking for RAG
 
 from pypdf import PdfReader
 from typing import List, Dict
+import re
+from config import CHUNK_SIZE, CHUNK_OVERLAP
 
 def process_pdf(pdf_path: str, filename: str) -> List[Dict]:
     """
@@ -25,11 +27,12 @@ def process_pdf(pdf_path: str, filename: str) -> List[Dict]:
         
         # Extract text from each page
         for page_num, page in enumerate(reader.pages, start=1):
-            text = page.extract_text()
-            
+            raw_text = page.extract_text()
+            text = clean_extracted_text(raw_text)
+
             if text.strip():  # Only process pages with text
                 # Split page into smaller chunks
-                page_chunks = split_text(text, chunk_size=800, overlap=200)
+                page_chunks = split_text(text, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
                 
                 # Add metadata to each chunk
                 for i, chunk_text in enumerate(page_chunks):
@@ -46,6 +49,38 @@ def process_pdf(pdf_path: str, filename: str) -> List[Dict]:
     
     except Exception as e:
         raise Exception(f"Error processing PDF {filename}: {str(e)}")
+
+
+def clean_extracted_text(text: str) -> str:
+    """
+    Clean noisy text from PDF extraction.
+
+    pypdf often extracts text with each word on its own line separated
+    by spaces/newlines (e.g. "Thet\\n \\nZin" instead of "Thet Zin").
+    This function collapses that noise into clean readable text.
+
+    Args:
+        text: Raw extracted text from pypdf
+
+    Returns:
+        Cleaned text with proper spacing
+    """
+    # Replace the common pypdf pattern: \n \n between words -> single space
+    text = re.sub(r'\n \n', ' ', text)
+
+    # Collapse multiple spaces into one
+    text = re.sub(r' {2,}', ' ', text)
+
+    # Collapse 3+ newlines into 2 (preserve paragraph breaks)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    # Clean up lines that are just whitespace
+    text = re.sub(r'\n +\n', '\n\n', text)
+
+    # Fix spacing before punctuation (e.g. "word ,word" -> "word, word")
+    text = re.sub(r'\s+([,.])', r'\1', text)
+
+    return text.strip()
 
 
 def split_text(text: str, chunk_size: int = 1000, overlap: int = 100) -> List[str]:
@@ -96,10 +131,10 @@ def split_text(text: str, chunk_size: int = 1000, overlap: int = 100) -> List[st
 def get_document_stats(chunks: List[Dict]) -> Dict:
     """
     Get statistics about processed documents
-    
+
     Args:
         chunks: List of document chunks
-    
+
     Returns:
         Dictionary with statistics
     """
@@ -107,15 +142,18 @@ def get_document_stats(chunks: List[Dict]) -> Dict:
         return {
             'total_chunks': 0,
             'total_characters': 0,
+            'pages': 0,
             'sources': []
         }
-    
+
     sources = list(set(chunk['metadata']['source'] for chunk in chunks))
     total_chars = sum(len(chunk['text']) for chunk in chunks)
-    
+    pages = len(set(chunk['metadata']['page'] for chunk in chunks))
+
     return {
         'total_chunks': len(chunks),
         'total_characters': total_chars,
+        'pages': pages,
         'sources': sources,
         'avg_chunk_size': total_chars // len(chunks) if chunks else 0
     }

@@ -99,6 +99,7 @@
             color: #856404;
             margin-top: 8px;
             border-left: 3px solid #ffc107;
+            white-space: pre-wrap;
         }
 
         .sources-title {
@@ -231,7 +232,7 @@
                         content: msg.content
                     }));
 
-                    const res = await fetch('/chat', {
+                    const res = await fetch('/chat/stream', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
@@ -239,7 +240,7 @@
                         body: JSON.stringify({
                             message: userMessage,
                             chat_history: chatHistory,
-                            n_results: 5
+                            n_results: 3  // Matches N_RESULTS_DEFAULT in config.py
                         })
                     });
 
@@ -247,18 +248,64 @@
                         throw new Error(`Error: ${res.status} ${res.statusText}`);
                     }
 
-                    const data = await res.json();
-
-                    // Add assistant response to chat
+                    // Add empty assistant message that we'll stream into
                     setMessages(prev => [...prev, {
                         role: 'assistant',
-                        content: data.response,
-                        sources: data.sources_text
+                        content: '',
+                        sources: null
                     }]);
+                    setLoading(false);
+
+                    // Read the SSE stream
+                    const reader = res.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop(); // Keep incomplete line in buffer
+
+                        for (const line of lines) {
+                            if (!line.startsWith('data: ')) continue;
+                            const jsonStr = line.slice(6).trim();
+                            if (!jsonStr) continue;
+
+                            try {
+                                const event = JSON.parse(jsonStr);
+
+                                if (event.type === 'token') {
+                                    setMessages(prev => {
+                                        const updated = [...prev];
+                                        const last = updated[updated.length - 1];
+                                        updated[updated.length - 1] = {
+                                            ...last,
+                                            content: last.content + event.content
+                                        };
+                                        return updated;
+                                    });
+                                } else if (event.type === 'sources') {
+                                    setMessages(prev => {
+                                        const updated = [...prev];
+                                        const last = updated[updated.length - 1];
+                                        updated[updated.length - 1] = {
+                                            ...last,
+                                            sources: event.sources_text
+                                        };
+                                        return updated;
+                                    });
+                                }
+                            } catch (parseErr) {
+                                // Skip malformed events
+                            }
+                        }
+                    }
 
                 } catch (err) {
                     setError(err.message);
-                    // Add error message to chat
                     setMessages(prev => [...prev, {
                         role: 'assistant',
                         content: `Error: ${err.message}`,

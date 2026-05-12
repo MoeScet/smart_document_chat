@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from contextlib import asynccontextmanager
 
 from vector_store import VectorStore
@@ -152,7 +152,7 @@ async def chat(request: ChatRequest):
             n_results=request.n_results
         )
 
-        # Format sources
+        # Format sources with chunk text
         formatted_sources = []
         if sources_list:
             for source in sources_list:
@@ -160,15 +160,19 @@ async def chat(request: ChatRequest):
                     Source(
                         filename=source.get("source", "unknown"),
                         page=source.get("page", 0),
-                        chunk_index=source.get("chunk", 0)
+                        text=source.get("text", "")
                     )
                 )
 
-        # Get formatted sources text
+        # Build readable sources text with evidence snippets
         sources_text = None
-        if sources_list:
-            formatted_source_list = vector_store.format_sources(sources_list)
-            sources_text = "Sources:\n" + "\n".join(f"- {src}" for src in formatted_source_list)
+        if formatted_sources:
+            parts = []
+            for src in formatted_sources:
+                # Truncate long chunks for display
+                snippet = src.text[:200] + "..." if len(src.text) > 200 else src.text
+                parts.append(f"[{src.filename} - Page {src.page}]\n\"{snippet}\"")
+            sources_text = "Sources:\n" + "\n\n".join(parts)
 
         return ChatResponse(
             response=response_text,
@@ -181,6 +185,38 @@ async def chat(request: ChatRequest):
     except Exception as e:
         logger.error(f"Error processing chat request: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
+
+
+@app.post("/chat/stream", tags=["Chat"])
+async def chat_stream(request: ChatRequest):
+    """
+    Streaming chat endpoint - tokens are sent as Server-Sent Events (SSE)
+    as they are generated, providing real-time response display.
+    """
+    if not chat_engine:
+        raise HTTPException(status_code=503, detail="Chat engine not initialized")
+
+    chat_history = [
+        {"role": msg.role, "content": msg.content}
+        for msg in request.chat_history
+    ]
+
+    def event_generator():
+        for chunk in chat_engine.get_response_stream(
+            query=request.message,
+            chat_history=chat_history,
+            n_results=request.n_results
+        ):
+            yield f"data: {chunk}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
 
 
 @app.get(
@@ -218,7 +254,7 @@ async def get_indexed_documents():
     response_model=DocumentStatsResponse,
     tags=["Documents"]
 )
-async def get_document_stats():
+async def document_stats():
     """
     Get statistics about indexed documents
 

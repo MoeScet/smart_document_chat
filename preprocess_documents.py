@@ -19,10 +19,7 @@ import sys
 from pathlib import Path
 from document_processor import process_pdf
 from vector_store import VectorStore
-
-# Configuration
-# This is where you place your PDF files
-DOCUMENTS_FOLDER = "./documents"
+from config import DOCUMENTS_FOLDER
 
 # Colors for terminal output (cross-platform)
 class Colors:
@@ -197,8 +194,8 @@ def process_documents():
     # Provide next steps
     if new_documents:
         print(f"{Colors.BOLD}Next steps:{Colors.END}")
-        print(f"   1. Run the Streamlit app: streamlit run app.py")
-        print(f"   2. Start asking questions about your documents!")
+        print(f"   1. Start the API server: uvicorn main:app --reload")
+        print(f"   2. Open http://localhost:8000 to start asking questions!")
         print()
 
 if __name__ == "__main__":

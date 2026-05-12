@@ -3,34 +3,40 @@ Vector Store Module
 Handles document embeddings and similarity search using ChromaDB
 """
 
+import os
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+
 import chromadb
+from chromadb.config import Settings as ChromaSettings
 from chromadb.utils import embedding_functions
 from typing import List, Dict, Tuple
 import uuid
+from config import EMBEDDING_MODEL, CHROMA_COLLECTION, CHROMA_PERSIST_DIR
 
 class VectorStore:
     """
     Manages document embeddings and retrieval using ChromaDB
     """
-    
-    def __init__(self, collection_name: str = "documents", persist_directory: str = "./chroma_db"):
+
+    def __init__(self, collection_name: str = None, persist_directory: str = None):
         """
         Initialize the vector store with persistent storage
 
         Args:
             collection_name: Name of the ChromaDB collection
-            persist_directory: Directory path where ChromaDB will save data (default: ./chroma_db)
+            persist_directory: Directory path where ChromaDB will save data
         """
-        # Initialize ChromaDB with persistent storage
-        # PersistentClient saves all data to disk, so vectors persist across app restarts
-        # This means users don't need to re-upload and re-process documents each time
-        self.client = chromadb.PersistentClient(path=persist_directory)
+        collection_name = collection_name or CHROMA_COLLECTION
+        persist_directory = persist_directory or CHROMA_PERSIST_DIR
+
+        self.client = chromadb.PersistentClient(
+            path=persist_directory,
+            settings=ChromaSettings(anonymized_telemetry=False)
+        )
         self.persist_directory = persist_directory
 
-        # Use sentence transformers for embeddings (free and runs locally)
-        # This model converts text into 384-dimensional vectors for semantic search
         self.embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="all-MiniLM-L6-v2"
+            model_name=EMBEDDING_MODEL
         )
 
         # Create or get collection
@@ -41,8 +47,8 @@ class VectorStore:
             embedding_function=self.embedding_function
         )
 
-        print(f"✅ Vector store initialized with collection: {collection_name}")
-        print(f"📁 Data persisted to: {persist_directory}")
+        print(f"Vector store initialized with collection: {collection_name}")
+        print(f"Data persisted to: {persist_directory}")
     
     def add_documents(self, chunks: List[Dict]) -> None:
         """
@@ -66,29 +72,32 @@ class VectorStore:
             metadatas=metadatas
         )
         
-        print(f"✅ Added {len(chunks)} chunks to vector store")
+        print(f"Added {len(chunks)} chunks to vector store")
     
-    def search(self, query: str, n_results: int = 3) -> Tuple[List[str], List[Dict]]:
+    def search(self, query: str, n_results: int = 3) -> Tuple[List[str], List[Dict], List[float]]:
         """
         Search for relevant documents
-        
+
         Args:
             query: The search query
             n_results: Number of results to return
-        
+
         Returns:
-            Tuple of (relevant_texts, metadatas)
+            Tuple of (relevant_texts, metadatas, distances)
+            distances are cosine distances (lower = more similar)
         """
         results = self.collection.query(
             query_texts=[query],
-            n_results=n_results
+            n_results=n_results,
+            include=["documents", "metadatas", "distances"]
         )
-        
-        # Extract documents and metadata
+
+        # Extract documents, metadata, and distances
         documents = results['documents'][0] if results['documents'] else []
         metadatas = results['metadatas'][0] if results['metadatas'] else []
-        
-        return documents, metadatas
+        distances = results['distances'][0] if results['distances'] else []
+
+        return documents, metadatas, distances
     
     def get_collection_count(self) -> int:
         """
@@ -109,7 +118,7 @@ class VectorStore:
             name=self.collection.name,
             embedding_function=self.embedding_function
         )
-        print("✅ Vector store cleared")
+        print("Vector store cleared")
     
     def format_sources(self, metadatas: List[Dict]) -> List[str]:
         """
@@ -196,6 +205,6 @@ class VectorStore:
         # Delete the chunks if any were found
         if ids_to_delete:
             self.collection.delete(ids=ids_to_delete)
-            print(f"✅ Deleted {len(ids_to_delete)} chunks from {filename}")
+            print(f"Deleted {len(ids_to_delete)} chunks from {filename}")
 
         return len(ids_to_delete)
